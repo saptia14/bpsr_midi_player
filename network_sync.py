@@ -1,0 +1,181 @@
+import ntplib
+import time
+import json
+import base64
+import uuid
+import paho.mqtt.client as mqtt
+
+BROKER = "broker.hivemq.com"
+PORT = 1883
+BASE_TOPIC = "bpsr_bard/room"
+
+class NetworkManager:
+    def __init__(self, on_state_change=None, on_play_cmd=None, on_midi_received=None):
+        self.client_id = str(uuid.uuid4())
+        self.nickname = "Player"
+        self.room_code = None
+        self.is_host = False
+        
+        self.ntp_offset = 0.0
+        self._sync_ntp()
+        
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=self.client_id)
+        self.client.on_connect = self._on_connect
+        self.client.on_message = self._on_message
+        
+        # Callbacks to UI
+        self.on_state_change = on_state_change
+        self.on_play_cmd = on_play_cmd
+        self.on_midi_received = on_midi_received
+        
+        # Room State (Host maintains this)
+        self.room_state = {
+            "players": [], # list of dicts: {"client_id": "", "nickname": "", "channels": []}
+            "filename": None
+        }
+
+    def _sync_ntp(self):
+        try:
+            client = ntplib.NTPClient()
+            response = client.request('pool.ntp.org', version=3, timeout=3)
+            # offset = ntp_time - system_time
+            # true_time = system_time + offset
+            self.ntp_offset = response.offset
+            print(f"NTP Sync successful. Offset: {self.ntp_offset:.3f}s")
+        except Exception as e:
+            print(f"NTP Sync failed. Relying on local clock. Error: {e}")
+            self.ntp_offset = 0.0
+
+    def get_global_time(self):
+        return time.time() + self.ntp_offset
+
+    def connect(self):
+        self.client.connect(BROKER, PORT, 60)
+        self.client.loop_start()
+
+    def disconnect(self):
+        self.client.loop_stop()
+        self.client.disconnect()
+
+    def host_room(self, room_code, nickname):
+        self.room_code = room_code.upper()
+        self.nickname = nickname
+        self.is_host = True
+        self.room_state = {
+            "players": [{"client_id": self.client_id, "nickname": self.nickname, "channels": []}],
+            "filename": None
+        }
+        self._subscribe()
+        self._broadcast_state()
+
+    def join_room(self, room_code, nickname):
+        self.room_code = room_code.upper()
+        self.nickname = nickname
+        self.is_host = False
+        self._subscribe()
+        
+        # Send join request
+        self._publish({
+            "type": "join",
+            "client_id": self.client_id,
+            "nickname": self.nickname
+        })
+
+    def assign_channels(self, target_client_id, channels):
+        if not self.is_host:
+            return
+        for p in self.room_state["players"]:
+            if p["client_id"] == target_client_id:
+                p["channels"] = channels
+        self._broadcast_state()
+
+    def share_midi(self, file_path, filename):
+        if not self.is_host:
+            return
+        self.room_state["filename"] = filename
+        try:
+            with open(file_path, "rb") as f:
+                data = base64.b64encode(f.read()).decode('utf-8')
+            
+            self._publish({
+                "type": "midi_file",
+                "filename": filename,
+                "data": data
+            })
+            self._broadcast_state()
+        except Exception as e:
+            print(f"Failed to share MIDI: {e}")
+
+    def send_play(self, delay_seconds=4.0):
+        if not self.is_host:
+            return
+        start_time = self.get_global_time() + delay_seconds
+        self._publish({
+            "type": "play",
+            "start_time": start_time
+        })
+
+    def _subscribe(self):
+        topic = f"{BASE_TOPIC}/{self.room_code}"
+        self.client.subscribe(topic)
+
+    def _publish(self, payload_dict):
+        topic = f"{BASE_TOPIC}/{self.room_code}"
+        self.client.publish(topic, json.dumps(payload_dict))
+
+    def _broadcast_state(self):
+        if self.is_host:
+            self._publish({
+                "type": "state",
+                "state": self.room_state
+            })
+            if self.on_state_change:
+                self.on_state_change(self.room_state)
+
+    def _on_connect(self, client, userdata, flags, reason_code, properties):
+        print(f"Connected to MQTT broker with result code {reason_code}")
+
+    def _on_message(self, client, userdata, msg):
+        try:
+            payload = json.loads(msg.payload.decode('utf-8'))
+            msg_type = payload.get("type")
+
+            if self.is_host:
+                if msg_type == "join":
+                    # Add player if not exists
+                    exists = any(p["client_id"] == payload["client_id"] for p in self.room_state["players"])
+                    if not exists:
+                        self.room_state["players"].append({
+                            "client_id": payload["client_id"],
+                            "nickname": payload["nickname"],
+                            "channels": []
+                        })
+                        self._broadcast_state()
+            else:
+                # Client processing
+                if msg_type == "state":
+                    self.room_state = payload["state"]
+                    if self.on_state_change:
+                        self.on_state_change(self.room_state)
+                elif msg_type == "midi_file":
+                    # Decode and save locally, or just parse in memory
+                    data = base64.b64decode(payload["data"])
+                    filename = payload["filename"]
+                    if self.on_midi_received:
+                        self.on_midi_received(filename, data)
+
+            # Both host and client handle 'play'
+            if msg_type == "play":
+                start_time = payload["start_time"]
+                # Find my channels
+                my_channels = []
+                for p in self.room_state["players"]:
+                    if p["client_id"] == self.client_id:
+                        my_channels = p["channels"]
+                        break
+                
+                if self.on_play_cmd:
+                    self.on_play_cmd(start_time, my_channels)
+
+        except Exception as e:
+            print(f"Error processing message: {e}")

@@ -18,32 +18,31 @@ class MidiPlayer:
         self.pause_time = 0.0
         self.time_offset = 0.0
         
-        # Performance tuning: time.sleep is inaccurate, we use a hybrid wait
         self.sleep_threshold = 0.002 
 
-    def load_events(self, events, active_channels):
+    def load_events(self, events, active_channels=None):
         self.stop()
         self.events = events
-        self.active_channels = set(active_channels)
+        if active_channels is not None:
+            self.active_channels = set(active_channels)
         self.current_event_idx = 0
 
     def set_active_channels(self, channels):
         self.active_channels = set(channels)
 
-    def play(self):
+    def play(self, delay_seconds=0.0):
         if self.is_playing:
             return
             
         if self.is_paused:
-            # Resume
             self.is_paused = False
             self.start_time += time.perf_counter() - self.pause_time
         else:
-            # Start fresh
             if not self.events:
                 return
             self.current_event_idx = 0
-            self.start_time = time.perf_counter()
+            # delay_seconds allows synchronization
+            self.start_time = time.perf_counter() + delay_seconds
             self.time_offset = 0.0
             
         self.stop_requested = False
@@ -68,7 +67,6 @@ class MidiPlayer:
         self.current_event_idx = 0
 
     def _accurate_delay(self, target_time):
-        """Wait until time.perf_counter() reaches target_time."""
         while True:
             if self.stop_requested or self.is_paused:
                 break
@@ -79,7 +77,6 @@ class MidiPlayer:
             if diff > self.sleep_threshold:
                 time.sleep(diff / 2.0)
             else:
-                # Spin lock for the last <2ms for high accuracy
                 pass
 
     def _playback_loop(self):
@@ -89,16 +86,13 @@ class MidiPlayer:
 
             ev = self.events[self.current_event_idx]
             
-            # Calculate target absolute time
             target_time = self.start_time + ev['time']
             
-            # Wait until target time
             self._accurate_delay(target_time)
             
             if self.stop_requested or self.is_paused:
                 break
 
-            # Execute event if channel is active
             if 'channel' in ev and ev['channel'] in self.active_channels:
                 if ev['type'] == 'note_on':
                     self.simulator.press_note(ev['note'])

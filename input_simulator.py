@@ -1,6 +1,5 @@
 import ctypes
 import time
-import threading
 from config import KEY_MAP, VK_LSHIFT, VK_LCONTROL, VK_SPACE, midi_to_note_name
 
 SendInput = ctypes.windll.user32.SendInput
@@ -65,30 +64,25 @@ class BPSRInputSimulator:
     def __init__(self):
         self.current_octave_shift = 0 # 0: normal, 1: High, -1: Low
         self.sustain_active = False
-
-    def toggle_high_octave(self):
-        tap_key(VK_LSHIFT)
-        self.current_octave_shift = 1
-        
-    def toggle_low_octave(self):
-        tap_key(VK_LCONTROL)
-        self.current_octave_shift = -1
-
-    def reset_octave(self):
-        if self.current_octave_shift == 1:
-            tap_key(VK_LSHIFT)
-        elif self.current_octave_shift == -1:
-            tap_key(VK_LCONTROL)
-        self.current_octave_shift = 0
+        self.key_refs = {}
 
     def set_octave_shift(self, target_shift):
         if self.current_octave_shift == target_shift:
             return
-        self.reset_octave()
+            
+        # Release the previous modifier
+        if self.current_octave_shift == 1:
+            release_key(VK_LSHIFT)
+        elif self.current_octave_shift == -1:
+            release_key(VK_LCONTROL)
+            
+        # Press the new modifier
         if target_shift == 1:
-            self.toggle_high_octave()
+            press_key(VK_LSHIFT)
         elif target_shift == -1:
-            self.toggle_low_octave()
+            press_key(VK_LCONTROL)
+            
+        self.current_octave_shift = target_shift
 
     def set_sustain(self, active):
         if self.sustain_active != active:
@@ -105,13 +99,29 @@ class BPSRInputSimulator:
         note_name = midi_to_note_name(base_note)
         vk_code = KEY_MAP.get(note_name)
         if vk_code:
-            press_key(vk_code)
-            # Release shortly after to prevent OS typematic key repeat (Ghost notes)
-            threading.Timer(0.03, release_key, args=[vk_code]).start()
+            refs = self.key_refs.get(vk_code, 0)
+            if refs == 0:
+                press_key(vk_code)
+            else:
+                # Key is already physically held. Release and press again to trigger the new note.
+                release_key(vk_code)
+                time.sleep(0.005)
+                press_key(vk_code)
+            self.key_refs[vk_code] = refs + 1
 
     def release_note(self, midi_note):
-        # We handle release automatically after press to avoid OS key repeat spam
-        pass
+        _, base_note = self._get_mapping(midi_note)
+        if base_note is None:
+            return
+            
+        note_name = midi_to_note_name(base_note)
+        vk_code = KEY_MAP.get(note_name)
+        if vk_code:
+            refs = self.key_refs.get(vk_code, 0)
+            if refs > 0:
+                self.key_refs[vk_code] = refs - 1
+                if self.key_refs[vk_code] == 0:
+                    release_key(vk_code)
 
     def _get_mapping(self, midi_note):
         # Check if playable in CURRENT shift first to minimize toggling
@@ -133,8 +143,16 @@ class BPSRInputSimulator:
         return 0, None
 
     def release_all(self):
-        self.reset_octave()
+        if self.current_octave_shift == 1:
+            release_key(VK_LSHIFT)
+        elif self.current_octave_shift == -1:
+            release_key(VK_LCONTROL)
+        self.current_octave_shift = 0
+        
         if self.sustain_active:
             self.set_sustain(False)
+            
         for vk_code in KEY_MAP.values():
             release_key(vk_code)
+            
+        self.key_refs.clear()

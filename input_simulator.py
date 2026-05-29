@@ -1,5 +1,6 @@
 import ctypes
 import time
+import threading
 from config import KEY_MAP, VK_LSHIFT, VK_LCONTROL, VK_SPACE, midi_to_note_name
 
 SendInput = ctypes.windll.user32.SendInput
@@ -105,21 +106,12 @@ class BPSRInputSimulator:
         vk_code = KEY_MAP.get(note_name)
         if vk_code:
             press_key(vk_code)
+            # Release shortly after to prevent OS typematic key repeat (Ghost notes)
+            threading.Timer(0.03, release_key, args=[vk_code]).start()
 
     def release_note(self, midi_note):
-        # Releasing doesn't strictly need to shift octaves back, 
-        # but if we do, we have to match what note it was playing.
-        # Actually, it's better not to shift octave just to release a note,
-        # otherwise we might get a ton of shift toggling during chord releases.
-        # So we just send the key release event directly.
-        target_shift, base_note = self._get_mapping(midi_note)
-        if base_note is None:
-            return
-            
-        note_name = midi_to_note_name(base_note)
-        vk_code = KEY_MAP.get(note_name)
-        if vk_code:
-            release_key(vk_code)
+        # We handle release automatically after press to avoid OS key repeat spam
+        pass
 
     def _get_mapping(self, midi_note):
         # Check if playable in CURRENT shift first to minimize toggling

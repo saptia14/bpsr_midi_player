@@ -14,7 +14,7 @@ class App(ctk.CTk):
         super().__init__()
 
         self.title("Blue Protocol MIDI Bard Player - Multiplayer")
-        self.geometry("600x750")
+        self.geometry("650x750")
         self.player = MidiPlayer()
         self.network = NetworkManager(
             on_state_change=self.on_network_state,
@@ -25,12 +25,24 @@ class App(ctk.CTk):
         self.events = []
         self.channels = []
         self.channel_vars = []
+        self.host_checkbox_vars = {}
 
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
 
+        # Global File Header (Always visible)
+        self.global_file_frame = ctk.CTkFrame(self)
+        self.global_file_frame.grid(row=0, column=0, padx=20, pady=(20, 0), sticky="ew")
+        
+        self.file_label = ctk.CTkLabel(self.global_file_frame, text="No file selected", font=ctk.CTkFont(weight="bold"))
+        self.file_label.pack(side="left", padx=10, pady=10)
+        
+        self.load_btn = ctk.CTkButton(self.global_file_frame, text="Load MIDI File", command=self.load_file)
+        self.load_btn.pack(side="right", padx=10, pady=10)
+
+        # Tabs
         self.tabview = ctk.CTkTabview(self)
-        self.tabview.grid(row=0, column=0, padx=20, pady=20, sticky="nsew")
+        self.tabview.grid(row=1, column=0, padx=20, pady=10, sticky="nsew")
         
         self.tab_solo = self.tabview.add("Solo Play")
         self.tab_multi = self.tabview.add("Multiplayer Lobby")
@@ -40,17 +52,10 @@ class App(ctk.CTk):
 
     def setup_solo_tab(self):
         self.tab_solo.grid_columnconfigure(0, weight=1)
-        self.tab_solo.grid_rowconfigure(3, weight=1)
-
-        self.file_frame = ctk.CTkFrame(self.tab_solo)
-        self.file_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
-        self.file_label = ctk.CTkLabel(self.file_frame, text="No file selected")
-        self.file_label.pack(side="left", padx=10, pady=10)
-        self.load_btn = ctk.CTkButton(self.file_frame, text="Load MIDI", command=self.load_file)
-        self.load_btn.pack(side="right", padx=10, pady=10)
+        self.tab_solo.grid_rowconfigure(1, weight=1)
 
         self.control_frame = ctk.CTkFrame(self.tab_solo)
-        self.control_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
+        self.control_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
         self.control_frame.grid_columnconfigure((0, 1, 2), weight=1)
         
         self.play_btn = ctk.CTkButton(self.control_frame, text="Play Solo", command=self.play_solo, fg_color="green", hover_color="darkgreen")
@@ -61,7 +66,7 @@ class App(ctk.CTk):
         self.stop_btn.grid(row=0, column=2, padx=10, pady=10)
 
         self.channel_frame = ctk.CTkScrollableFrame(self.tab_solo, label_text="Solo Active Channels")
-        self.channel_frame.grid(row=3, column=0, padx=10, pady=10, sticky="nsew")
+        self.channel_frame.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
 
     def setup_multi_tab(self):
         self.tab_multi.grid_columnconfigure(0, weight=1)
@@ -70,32 +75,33 @@ class App(ctk.CTk):
         # Connection Setup
         self.conn_frame = ctk.CTkFrame(self.tab_multi)
         self.conn_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+        self.conn_frame.grid_columnconfigure((0, 1), weight=1)
         
         self.nick_entry = ctk.CTkEntry(self.conn_frame, placeholder_text="Nickname")
-        self.nick_entry.grid(row=0, column=0, padx=5, pady=5)
+        self.nick_entry.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
         self.room_entry = ctk.CTkEntry(self.conn_frame, placeholder_text="Room Code")
-        self.room_entry.grid(row=0, column=1, padx=5, pady=5)
+        self.room_entry.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
         
         self.host_btn = ctk.CTkButton(self.conn_frame, text="Host Room", command=self.host_room)
-        self.host_btn.grid(row=1, column=0, padx=5, pady=5)
+        self.host_btn.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
         self.join_btn = ctk.CTkButton(self.conn_frame, text="Join Room", command=self.join_room)
-        self.join_btn.grid(row=1, column=1, padx=5, pady=5)
+        self.join_btn.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
 
         # Status
         self.status_label = ctk.CTkLabel(self.tab_multi, text="Not Connected", text_color="gray")
         self.status_label.grid(row=1, column=0, pady=5)
 
         # Lobby List
-        self.lobby_frame = ctk.CTkScrollableFrame(self.tab_multi, label_text="Lobby Players")
+        self.lobby_frame = ctk.CTkScrollableFrame(self.tab_multi, label_text="Lobby Players (Host assigns channels here)")
         self.lobby_frame.grid(row=2, column=0, padx=10, pady=10, sticky="nsew")
 
         # Host Controls
         self.host_control_frame = ctk.CTkFrame(self.tab_multi)
         self.host_control_frame.grid(row=3, column=0, padx=10, pady=10, sticky="ew")
-        self.host_control_frame.grid_columnconfigure((0,1), weight=1)
+        self.host_control_frame.grid_columnconfigure(0, weight=1)
         
-        self.sync_play_btn = ctk.CTkButton(self.host_control_frame, text="SYNC PLAY (3s delay)", command=self.sync_play, fg_color="purple", hover_color="purple", state="disabled")
-        self.sync_play_btn.grid(row=0, column=0, padx=5, pady=5, columnspan=2, sticky="ew")
+        self.sync_play_btn = ctk.CTkButton(self.host_control_frame, text="SYNC PLAY (4s delay)", command=self.sync_play, fg_color="purple", hover_color="#5e0082", state="disabled")
+        self.sync_play_btn.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
 
     # --- Actions ---
 
@@ -110,6 +116,10 @@ class App(ctk.CTk):
             # If hosting, share to room
             if self.network.room_code and self.network.is_host:
                 self.network.share_midi(file_path, filename)
+            
+            # Update lobby UI to show new checkboxes if host
+            if self.network.room_code:
+                self._update_lobby_ui(self.network.room_state)
 
     def _parse_and_load(self, file_path):
         self.events = parse_midi(file_path)
@@ -164,7 +174,7 @@ class App(ctk.CTk):
             self.player.stop()
             self.network.send_play(delay_seconds=4.0)
 
-    # --- Callbacks from NetworkManager (Run in background thread, so we must schedule UI updates) ---
+    # --- Callbacks from NetworkManager (Run in background thread, schedule UI updates) ---
 
     def on_network_state(self, state):
         self.after(0, self._update_lobby_ui, state)
@@ -179,31 +189,42 @@ class App(ctk.CTk):
         for widget in self.lobby_frame.winfo_children():
             widget.destroy()
             
-        fn = state.get("filename", "None")
-        ctk.CTkLabel(self.lobby_frame, text=f"Loaded Song: {fn}", font=ctk.CTkFont(weight="bold")).pack(pady=5)
+        fn = state.get("filename")
+        if fn:
+            ctk.CTkLabel(self.lobby_frame, text=f"🎵 Shared Song: {fn}", font=ctk.CTkFont(weight="bold")).pack(pady=5)
+
+        self.host_checkbox_vars = {}
 
         for p in state["players"]:
             frame = ctk.CTkFrame(self.lobby_frame)
             frame.pack(fill="x", pady=5, padx=5)
             
             name = f"{p['nickname']} (Me)" if p['client_id'] == self.network.client_id else p['nickname']
-            lbl = ctk.CTkLabel(frame, text=name, width=150, anchor="w")
-            lbl.pack(side="left", padx=10, pady=5)
+            lbl = ctk.CTkLabel(frame, text=name, width=120, anchor="w", font=ctk.CTkFont(weight="bold"))
+            lbl.pack(side="left", padx=10, pady=10)
             
             if self.network.is_host:
-                ch_entry = ctk.CTkEntry(frame, width=100)
-                ch_entry.insert(0, ",".join(map(str, p["channels"])))
-                ch_entry.pack(side="left", padx=5, pady=5)
+                ch_frame = ctk.CTkScrollableFrame(frame, height=40, fg_color="transparent", orientation="horizontal")
+                ch_frame.pack(side="left", fill="x", expand=True, padx=5)
                 
-                def assign_cmd(cid=p['client_id'], ent=ch_entry):
-                    chs = [int(x.strip()) for x in ent.get().split(",") if x.strip().isdigit()]
-                    self.network.assign_channels(cid, chs)
-                    
-                btn = ctk.CTkButton(frame, text="Assign Ch", width=80, command=assign_cmd)
-                btn.pack(side="left", padx=5, pady=5)
+                if not self.channels:
+                    ctk.CTkLabel(ch_frame, text="Load a MIDI file first to assign channels.", text_color="gray").pack(side="left")
+                else:
+                    self.host_checkbox_vars[p['client_id']] = {}
+                    for ch in self.channels:
+                        var = ctk.BooleanVar(value=(ch in p["channels"]))
+                        self.host_checkbox_vars[p['client_id']][ch] = var
+                        
+                        def on_toggle(cid=p['client_id']):
+                            chs = [c for c, v in self.host_checkbox_vars[cid].items() if v.get()]
+                            self.network.assign_channels(cid, chs)
+                            
+                        cb = ctk.CTkCheckBox(ch_frame, text=f"Ch {ch}", variable=var, command=on_toggle)
+                        cb.pack(side="left", padx=10, pady=5)
             else:
-                lbl2 = ctk.CTkLabel(frame, text=f"Channels: {p['channels']}")
-                lbl2.pack(side="left", padx=10, pady=5)
+                assigned_text = ", ".join(map(str, p['channels'])) if p['channels'] else "None"
+                lbl2 = ctk.CTkLabel(frame, text=f"Assigned Channels: {assigned_text}", text_color="cyan")
+                lbl2.pack(side="left", padx=10, pady=10)
 
     def _trigger_play(self, global_start_time, my_channels):
         delay = global_start_time - self.network.get_global_time()

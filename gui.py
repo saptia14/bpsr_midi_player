@@ -47,7 +47,7 @@ class App(ctk.CTk):
         self.prev_btn.pack(side="left", padx=2, pady=10)
         
         self.song_var = ctk.StringVar(value="No file selected")
-        self.song_menu = ctk.CTkOptionMenu(self.global_file_frame, values=["No file selected"], variable=self.song_var, command=self.on_song_select)
+        self.song_menu = ctk.CTkOptionMenu(self.global_file_frame, values=["No file selected"], variable=self.song_var, command=self.on_song_select, dynamic_resizing=False)
         self.song_menu.pack(side="left", padx=10, pady=10, fill="x", expand=True)
         
         self.next_btn = ctk.CTkButton(self.global_file_frame, text="⏭", width=30, command=self.next_song)

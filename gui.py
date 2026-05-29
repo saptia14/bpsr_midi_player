@@ -29,7 +29,7 @@ class App(ctk.CTk):
         self.host_checkbox_vars = {}
 
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=1)
+        self.grid_rowconfigure(2, weight=1)
 
         # Global File Header (Always visible)
         self.global_file_frame = ctk.CTkFrame(self)
@@ -43,10 +43,21 @@ class App(ctk.CTk):
         
         self.load_btn = ctk.CTkButton(self.global_file_frame, text="Load MIDI File", command=self.load_file)
         self.load_btn.pack(side="right", padx=10, pady=10)
+        
+        # Timeline / Progress
+        self.progress_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.progress_frame.grid(row=1, column=0, padx=20, pady=5, sticky="ew")
+        
+        self.time_label = ctk.CTkLabel(self.progress_frame, text="00:00 / 00:00", width=80)
+        self.time_label.pack(side="left", padx=5)
+        
+        self.progress_bar = ctk.CTkProgressBar(self.progress_frame)
+        self.progress_bar.pack(side="left", fill="x", expand=True, padx=5)
+        self.progress_bar.set(0)
 
         # Tabs
         self.tabview = ctk.CTkTabview(self)
-        self.tabview.grid(row=1, column=0, padx=20, pady=10, sticky="nsew")
+        self.tabview.grid(row=2, column=0, padx=20, pady=10, sticky="nsew")
         
         self.tab_solo = self.tabview.add("Solo Play")
         self.tab_multi = self.tabview.add("Multiplayer Lobby")
@@ -121,6 +132,22 @@ class App(ctk.CTk):
             self.led_label.configure(text="🟢 Playing", text_color="green")
         else:
             self.led_label.configure(text="🔴 Stopped", text_color="gray")
+            
+        current = self.player.get_current_time()
+        total = self.player.get_total_time()
+        
+        if total > 0:
+            progress = max(0.0, min(1.0, current / total))
+            self.progress_bar.set(progress)
+            
+            curr_m = int(current // 60)
+            curr_s = int(current % 60)
+            tot_m = int(total // 60)
+            tot_s = int(total % 60)
+            self.time_label.configure(text=f"{curr_m:02d}:{curr_s:02d} / {tot_m:02d}:{tot_s:02d}")
+        else:
+            self.progress_bar.set(0)
+            self.time_label.configure(text="00:00 / 00:00")
             
         self.after(200, self.update_led_loop)
 

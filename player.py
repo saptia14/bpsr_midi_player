@@ -21,6 +21,20 @@ class MidiPlayer:
         
         self.sleep_threshold = 0.002 
 
+    def get_total_time(self):
+        if not self.events:
+            return 0.0
+        return self.events[-1]['time']
+
+    def get_current_time(self):
+        if not self.is_playing and not self.is_paused:
+            return 0.0
+        if self.is_syncing:
+            return 0.0
+        if self.is_paused:
+            return self.pause_time - self.start_time
+        return time.perf_counter() - self.start_time
+
     def load_events(self, events, active_channels=None):
         self.stop()
         self.events = events

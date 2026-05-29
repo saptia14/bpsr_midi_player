@@ -19,6 +19,7 @@ class App(ctk.CTk):
         self.network = NetworkManager(
             on_state_change=self.on_network_state,
             on_play_cmd=self.on_network_play,
+            on_stop_cmd=self.on_network_stop,
             on_midi_received=self.on_network_midi
         )
         
@@ -37,6 +38,9 @@ class App(ctk.CTk):
         self.file_label = ctk.CTkLabel(self.global_file_frame, text="No file selected", font=ctk.CTkFont(weight="bold"))
         self.file_label.pack(side="left", padx=10, pady=10)
         
+        self.led_label = ctk.CTkLabel(self.global_file_frame, text="🔴 Stopped", font=ctk.CTkFont(weight="bold"), width=120)
+        self.led_label.pack(side="left", padx=20, pady=10)
+        
         self.load_btn = ctk.CTkButton(self.global_file_frame, text="Load MIDI File", command=self.load_file)
         self.load_btn.pack(side="right", padx=10, pady=10)
 
@@ -49,6 +53,8 @@ class App(ctk.CTk):
 
         self.setup_solo_tab()
         self.setup_multi_tab()
+        
+        self.update_led_loop()
 
     def setup_solo_tab(self):
         self.tab_solo.grid_columnconfigure(0, weight=1)
@@ -98,12 +104,25 @@ class App(ctk.CTk):
         # Host Controls
         self.host_control_frame = ctk.CTkFrame(self.tab_multi)
         self.host_control_frame.grid(row=3, column=0, padx=10, pady=10, sticky="ew")
-        self.host_control_frame.grid_columnconfigure(0, weight=1)
+        self.host_control_frame.grid_columnconfigure((0, 1), weight=1)
         
         self.sync_play_btn = ctk.CTkButton(self.host_control_frame, text="SYNC PLAY (4s delay)", command=self.sync_play, fg_color="purple", hover_color="#5e0082", state="disabled")
         self.sync_play_btn.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
+        
+        self.sync_stop_btn = ctk.CTkButton(self.host_control_frame, text="STOP SINC", command=self.sync_stop, fg_color="red", hover_color="darkred", state="disabled")
+        self.sync_stop_btn.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
 
     # --- Actions ---
+
+    def update_led_loop(self):
+        if self.player.is_syncing:
+            self.led_label.configure(text="🟡 Syncing...", text_color="yellow")
+        elif self.player.is_playing:
+            self.led_label.configure(text="🟢 Playing", text_color="green")
+        else:
+            self.led_label.configure(text="🔴 Stopped", text_color="gray")
+            
+        self.after(200, self.update_led_loop)
 
     def load_file(self):
         file_path = filedialog.askopenfilename(filetypes=[("MIDI Files", "*.mid *.midi")])
@@ -155,6 +174,7 @@ class App(ctk.CTk):
         self.network.host_room(room, nick)
         self.status_label.configure(text=f"Hosting Room: {room} | Waiting for players...", text_color="green")
         self.sync_play_btn.configure(state="normal")
+        self.sync_stop_btn.configure(state="normal")
         self.host_btn.configure(state="disabled")
         self.join_btn.configure(state="disabled")
 
@@ -173,6 +193,10 @@ class App(ctk.CTk):
         if self.events and self.network.is_host:
             self.player.stop()
             self.network.send_play(delay_seconds=4.0)
+            
+    def sync_stop(self):
+        if self.network.is_host:
+            self.network.send_stop()
 
     # --- Callbacks from NetworkManager (Run in background thread, schedule UI updates) ---
 
@@ -181,6 +205,9 @@ class App(ctk.CTk):
 
     def on_network_play(self, global_start_time, my_channels):
         self.after(0, self._trigger_play, global_start_time, my_channels)
+
+    def on_network_stop(self):
+        self.after(0, self.player.stop)
 
     def on_network_midi(self, filename, data):
         self.after(0, self._save_and_load_midi, filename, data)
@@ -199,9 +226,18 @@ class App(ctk.CTk):
             frame = ctk.CTkFrame(self.lobby_frame)
             frame.pack(fill="x", pady=5, padx=5)
             
-            name = f"{p['nickname']} (Me)" if p['client_id'] == self.network.client_id else p['nickname']
+            is_me = p['client_id'] == self.network.client_id
+            name = f"{p['nickname']} (Me)" if is_me else p['nickname']
+            
+            # Status dot
+            status_color = "green" if p.get("connected", True) else "red"
+            status_text = "🟢" if p.get("connected", True) else "🔴"
+            
+            status_lbl = ctk.CTkLabel(frame, text=status_text, width=20)
+            status_lbl.pack(side="left", padx=(10, 0), pady=10)
+            
             lbl = ctk.CTkLabel(frame, text=name, width=120, anchor="w", font=ctk.CTkFont(weight="bold"))
-            lbl.pack(side="left", padx=10, pady=10)
+            lbl.pack(side="left", padx=(5, 10), pady=10)
             
             if self.network.is_host:
                 ch_frame = ctk.CTkScrollableFrame(frame, height=40, fg_color="transparent", orientation="horizontal")

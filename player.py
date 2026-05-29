@@ -11,6 +11,7 @@ class MidiPlayer:
         self.is_playing = False
         self.is_paused = False
         self.stop_requested = False
+        self.is_syncing = False
         
         self.thread = None
         self.current_event_idx = 0
@@ -61,6 +62,7 @@ class MidiPlayer:
         self.stop_requested = True
         self.is_playing = False
         self.is_paused = False
+        self.is_syncing = False
         if self.thread and self.thread.is_alive():
             self.thread.join(timeout=1.0)
         self.simulator.release_all()
@@ -88,7 +90,11 @@ class MidiPlayer:
             
             target_time = self.start_time + ev['time']
             
+            if target_time - time.perf_counter() > 0.05:
+                self.is_syncing = True
+            
             self._accurate_delay(target_time)
+            self.is_syncing = False
             
             if self.stop_requested or self.is_paused:
                 break

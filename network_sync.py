@@ -3,6 +3,7 @@ import time
 import json
 import base64
 import uuid
+import threading
 import paho.mqtt.client as mqtt
 
 BROKER = "broker.hivemq.com"
@@ -10,7 +11,7 @@ PORT = 1883
 BASE_TOPIC = "bpsr_bard/room"
 
 class NetworkManager:
-    def __init__(self, on_state_change=None, on_play_cmd=None, on_midi_received=None):
+    def __init__(self, on_state_change=None, on_play_cmd=None, on_stop_cmd=None, on_midi_received=None):
         self.client_id = str(uuid.uuid4())
         self.nickname = "Player"
         self.room_code = None
@@ -26,20 +27,22 @@ class NetworkManager:
         # Callbacks to UI
         self.on_state_change = on_state_change
         self.on_play_cmd = on_play_cmd
+        self.on_stop_cmd = on_stop_cmd
         self.on_midi_received = on_midi_received
         
         # Room State (Host maintains this)
         self.room_state = {
-            "players": [], # list of dicts: {"client_id": "", "nickname": "", "channels": []}
+            "players": [], # list of dicts: {"client_id": "", "nickname": "", "channels": [], "connected": True, "last_seen": 0}
             "filename": None
         }
+
+        self.heartbeat_thread = None
+        self.running = False
 
     def _sync_ntp(self):
         try:
             client = ntplib.NTPClient()
             response = client.request('pool.ntp.org', version=3, timeout=3)
-            # offset = ntp_time - system_time
-            # true_time = system_time + offset
             self.ntp_offset = response.offset
             print(f"NTP Sync successful. Offset: {self.ntp_offset:.3f}s")
         except Exception as e:
@@ -50,10 +53,16 @@ class NetworkManager:
         return time.time() + self.ntp_offset
 
     def connect(self):
+        self.running = True
         self.client.connect(BROKER, PORT, 60)
         self.client.loop_start()
+        
+        # Start heartbeat loop
+        self.heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
+        self.heartbeat_thread.start()
 
     def disconnect(self):
+        self.running = False
         self.client.loop_stop()
         self.client.disconnect()
 
@@ -62,7 +71,7 @@ class NetworkManager:
         self.nickname = nickname
         self.is_host = True
         self.room_state = {
-            "players": [{"client_id": self.client_id, "nickname": self.nickname, "channels": []}],
+            "players": [{"client_id": self.client_id, "nickname": self.nickname, "channels": [], "connected": True, "last_seen": time.time()}],
             "filename": None
         }
         self._subscribe()
@@ -114,6 +123,13 @@ class NetworkManager:
             "type": "play",
             "start_time": start_time
         })
+        
+    def send_stop(self):
+        if not self.is_host:
+            return
+        self._publish({
+            "type": "stop"
+        })
 
     def _subscribe(self):
         topic = f"{BASE_TOPIC}/{self.room_code}"
@@ -132,6 +148,25 @@ class NetworkManager:
             if self.on_state_change:
                 self.on_state_change(self.room_state)
 
+    def _heartbeat_loop(self):
+        while self.running:
+            if self.room_code:
+                # Send my heartbeat
+                self._publish({"type": "heartbeat", "client_id": self.client_id})
+                
+                # If host, check for timeouts
+                if self.is_host:
+                    changed = False
+                    current_time = time.time()
+                    for p in self.room_state["players"]:
+                        if p["client_id"] != self.client_id:
+                            if p["connected"] and (current_time - p["last_seen"] > 12.0):
+                                p["connected"] = False
+                                changed = True
+                    if changed:
+                        self._broadcast_state()
+            time.sleep(5)
+
     def _on_connect(self, client, userdata, flags, reason_code, properties):
         print(f"Connected to MQTT broker with result code {reason_code}")
 
@@ -142,15 +177,32 @@ class NetworkManager:
 
             if self.is_host:
                 if msg_type == "join":
-                    # Add player if not exists
-                    exists = any(p["client_id"] == payload["client_id"] for p in self.room_state["players"])
+                    exists = False
+                    for p in self.room_state["players"]:
+                        if p["client_id"] == payload["client_id"]:
+                            p["connected"] = True
+                            p["last_seen"] = time.time()
+                            exists = True
+                            break
                     if not exists:
                         self.room_state["players"].append({
                             "client_id": payload["client_id"],
                             "nickname": payload["nickname"],
-                            "channels": []
+                            "channels": [],
+                            "connected": True,
+                            "last_seen": time.time()
                         })
-                        self._broadcast_state()
+                    self._broadcast_state()
+                
+                elif msg_type == "heartbeat":
+                    for p in self.room_state["players"]:
+                        if p["client_id"] == payload["client_id"]:
+                            if not p["connected"]:
+                                p["connected"] = True
+                                self._broadcast_state()
+                            p["last_seen"] = time.time()
+                            break
+
             else:
                 # Client processing
                 if msg_type == "state":
@@ -158,16 +210,14 @@ class NetworkManager:
                     if self.on_state_change:
                         self.on_state_change(self.room_state)
                 elif msg_type == "midi_file":
-                    # Decode and save locally, or just parse in memory
                     data = base64.b64decode(payload["data"])
                     filename = payload["filename"]
                     if self.on_midi_received:
                         self.on_midi_received(filename, data)
 
-            # Both host and client handle 'play'
+            # Both host and client handle 'play' and 'stop'
             if msg_type == "play":
                 start_time = payload["start_time"]
-                # Find my channels
                 my_channels = []
                 for p in self.room_state["players"]:
                     if p["client_id"] == self.client_id:
@@ -176,6 +226,10 @@ class NetworkManager:
                 
                 if self.on_play_cmd:
                     self.on_play_cmd(start_time, my_channels)
+            
+            elif msg_type == "stop":
+                if self.on_stop_cmd:
+                    self.on_stop_cmd()
 
         except Exception as e:
-            print(f"Error processing message: {e}")
+            pass # Ignore malformed json

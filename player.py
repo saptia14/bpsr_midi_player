@@ -4,9 +4,10 @@ from input_simulator import BPSRInputSimulator
 
 class MidiPlayer:
     def __init__(self):
-        self.simulator = BPSRInputSimulator()
+        self.simulator = BPSRInputSimulator() if BPSRInputSimulator else None
         self.events = []
         self.active_channels = set()
+        self.transpose = 0
         
         self.is_playing = False
         self.is_paused = False
@@ -113,11 +114,14 @@ class MidiPlayer:
 
             if 'channel' in ev and ev['channel'] in self.active_channels:
                 if ev['type'] == 'note_on':
-                    self.simulator.press_note(ev['note'])
+                    if self.simulator:
+                        self.simulator.press_note(ev['note'] + self.transpose)
                 elif ev['type'] == 'note_off':
-                    self.simulator.release_note(ev['note'])
+                    if self.simulator:
+                        self.simulator.release_note(ev['note'] + self.transpose)
                 elif ev['type'] == 'sustain':
-                    self.simulator.set_sustain(ev['value'])
+                    if self.simulator:
+                        self.simulator.set_sustain(ev['value'])
 
             self.current_event_idx += 1
 

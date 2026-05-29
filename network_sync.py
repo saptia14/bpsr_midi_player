@@ -32,7 +32,7 @@ class NetworkManager:
         
         # Room State (Host maintains this)
         self.room_state = {
-            "players": [], # list of dicts: {"client_id": "", "nickname": "", "channels": [], "connected": True, "last_seen": 0}
+            "players": [], # list of dicts: {"client_id": "", "nickname": "", "channels": [], "connected": True, "last_seen": 0, "ready": False}
             "filename": None
         }
 
@@ -71,7 +71,7 @@ class NetworkManager:
         self.nickname = nickname
         self.is_host = True
         self.room_state = {
-            "players": [{"client_id": self.client_id, "nickname": self.nickname, "channels": [], "connected": True, "last_seen": time.time()}],
+            "players": [{"client_id": self.client_id, "nickname": self.nickname, "channels": [], "connected": True, "last_seen": time.time(), "ready": True}],
             "filename": None
         }
         self._subscribe()
@@ -98,6 +98,13 @@ class NetworkManager:
                 p["channels"] = channels
         self._broadcast_state()
 
+    def send_ready_status(self, is_ready):
+        self._publish({
+            "type": "ready",
+            "client_id": self.client_id,
+            "ready": is_ready
+        })
+
     def share_midi(self, file_path, filename):
         if not self.is_host:
             return
@@ -119,6 +126,13 @@ class NetworkManager:
         if not self.is_host:
             return
         start_time = self.get_global_time() + delay_seconds
+        
+        # Reset ready status
+        for p in self.room_state["players"]:
+            if p["client_id"] != self.client_id:
+                p["ready"] = False
+        self._broadcast_state()
+        
         self._publish({
             "type": "play",
             "start_time": start_time
@@ -190,7 +204,8 @@ class NetworkManager:
                             "nickname": payload["nickname"],
                             "channels": [],
                             "connected": True,
-                            "last_seen": time.time()
+                            "last_seen": time.time(),
+                            "ready": False
                         })
                     self._broadcast_state()
                 
@@ -201,6 +216,13 @@ class NetworkManager:
                                 p["connected"] = True
                                 self._broadcast_state()
                             p["last_seen"] = time.time()
+                            break
+
+                elif msg_type == "ready":
+                    for p in self.room_state["players"]:
+                        if p["client_id"] == payload["client_id"]:
+                            p["ready"] = payload["ready"]
+                            self._broadcast_state()
                             break
 
             else:

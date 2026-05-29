@@ -5,6 +5,7 @@ import tempfile
 from midi_parser import parse_midi, get_channels_info
 from player import MidiPlayer
 from network_sync import NetworkManager
+from live_midi import LiveMidiListener
 
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
@@ -16,6 +17,7 @@ class App(ctk.CTk):
         self.title("Blue Protocol MIDI Bard Player - Multiplayer")
         self.geometry("650x750")
         self.player = MidiPlayer()
+        self.live_midi = LiveMidiListener(self.player.simulator)
         self.network = NetworkManager(
             on_state_change=self.on_network_state,
             on_play_cmd=self.on_network_play,
@@ -24,9 +26,12 @@ class App(ctk.CTk):
         )
         
         self.events = []
-        self.channels = []
-        self.channel_vars = []
         self.host_checkbox_vars = {}
+        self.my_ready_status = False
+        
+        self.playlist = [] # list of dicts: {"name": str, "path": str}
+        self.current_song_idx = -1
+        self.was_playing = False
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(2, weight=1)
@@ -35,13 +40,20 @@ class App(ctk.CTk):
         self.global_file_frame = ctk.CTkFrame(self)
         self.global_file_frame.grid(row=0, column=0, padx=20, pady=(20, 0), sticky="ew")
         
-        self.file_label = ctk.CTkLabel(self.global_file_frame, text="No file selected", font=ctk.CTkFont(weight="bold"))
-        self.file_label.pack(side="left", padx=10, pady=10)
+        self.led_label = ctk.CTkLabel(self.global_file_frame, text="🔴 Stopped", font=ctk.CTkFont(weight="bold"), width=90)
+        self.led_label.pack(side="left", padx=10, pady=10)
         
-        self.led_label = ctk.CTkLabel(self.global_file_frame, text="🔴 Stopped", font=ctk.CTkFont(weight="bold"), width=120)
-        self.led_label.pack(side="left", padx=20, pady=10)
+        self.prev_btn = ctk.CTkButton(self.global_file_frame, text="⏮", width=30, command=self.prev_song)
+        self.prev_btn.pack(side="left", padx=2, pady=10)
         
-        self.load_btn = ctk.CTkButton(self.global_file_frame, text="Load MIDI File", command=self.load_file)
+        self.song_var = ctk.StringVar(value="No file selected")
+        self.song_menu = ctk.CTkOptionMenu(self.global_file_frame, values=["No file selected"], variable=self.song_var, command=self.on_song_select)
+        self.song_menu.pack(side="left", padx=10, pady=10, fill="x", expand=True)
+        
+        self.next_btn = ctk.CTkButton(self.global_file_frame, text="⏭", width=30, command=self.next_song)
+        self.next_btn.pack(side="left", padx=2, pady=10)
+        
+        self.load_btn = ctk.CTkButton(self.global_file_frame, text="Load MIDI(s)", command=self.load_files)
         self.load_btn.pack(side="right", padx=10, pady=10)
         
         # Timeline / Progress
@@ -69,11 +81,24 @@ class App(ctk.CTk):
 
     def setup_solo_tab(self):
         self.tab_solo.grid_columnconfigure(0, weight=1)
-        self.tab_solo.grid_rowconfigure(1, weight=1)
+        self.tab_solo.grid_rowconfigure(2, weight=1)
 
+        # Live MIDI Keyboard
+        self.live_midi_frame = ctk.CTkFrame(self.tab_solo)
+        self.live_midi_frame.grid(row=0, column=0, padx=10, pady=(10, 0), sticky="ew")
+        self.live_midi_frame.grid_columnconfigure(1, weight=1)
+        
+        ctk.CTkLabel(self.live_midi_frame, text="Live MIDI Keyboard:").grid(row=0, column=0, padx=10, pady=10)
+        
+        devices = ["None"] + self.live_midi.get_devices()
+        self.device_var = ctk.StringVar(value="None")
+        self.device_menu = ctk.CTkOptionMenu(self.live_midi_frame, values=devices, variable=self.device_var, command=self.on_midi_device_select)
+        self.device_menu.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
+
+        # Play Controls
         self.control_frame = ctk.CTkFrame(self.tab_solo)
-        self.control_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
-        self.control_frame.grid_columnconfigure((0, 1, 2), weight=1)
+        self.control_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
+        self.control_frame.grid_columnconfigure((0, 1, 2, 3), weight=1)
         
         self.play_btn = ctk.CTkButton(self.control_frame, text="Play Solo", command=self.play_solo, fg_color="green", hover_color="darkgreen")
         self.play_btn.grid(row=0, column=0, padx=10, pady=10)
@@ -81,9 +106,29 @@ class App(ctk.CTk):
         self.pause_btn.grid(row=0, column=1, padx=10, pady=10)
         self.stop_btn = ctk.CTkButton(self.control_frame, text="Stop", command=self.player.stop, fg_color="red", hover_color="darkred")
         self.stop_btn.grid(row=0, column=2, padx=10, pady=10)
+        
+        # Transpose
+        self.transpose_frame = ctk.CTkFrame(self.control_frame, fg_color="transparent")
+        self.transpose_frame.grid(row=0, column=3, padx=10, pady=10)
+        self.transpose_label = ctk.CTkLabel(self.transpose_frame, text="Transpose: 0")
+        self.transpose_label.pack()
+        self.transpose_slider = ctk.CTkSlider(self.transpose_frame, from_=-12, to=12, number_of_steps=24, command=self.on_transpose)
+        self.transpose_slider.set(0)
+        self.transpose_slider.pack(pady=5)
 
         self.channel_frame = ctk.CTkScrollableFrame(self.tab_solo, label_text="Solo Active Channels")
-        self.channel_frame.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
+        self.channel_frame.grid(row=2, column=0, padx=10, pady=10, sticky="nsew")
+
+    def on_transpose(self, val):
+        val = int(val)
+        self.transpose_label.configure(text=f"Transpose: {val:+d}")
+        self.player.transpose = val
+
+    def on_midi_device_select(self, choice):
+        if choice == "None":
+            self.live_midi.stop_listening()
+        else:
+            self.live_midi.start_listening(choice)
 
     def setup_multi_tab(self):
         self.tab_multi.grid_columnconfigure(0, weight=1)
@@ -114,14 +159,22 @@ class App(ctk.CTk):
 
         # Host Controls
         self.host_control_frame = ctk.CTkFrame(self.tab_multi)
-        self.host_control_frame.grid(row=3, column=0, padx=10, pady=10, sticky="ew")
+        self.host_control_frame.grid(row=3, column=0, padx=10, pady=5, sticky="ew")
         self.host_control_frame.grid_columnconfigure((0, 1), weight=1)
         
-        self.sync_play_btn = ctk.CTkButton(self.host_control_frame, text="SYNC PLAY (4s delay)", command=self.sync_play, fg_color="purple", hover_color="#5e0082", state="disabled")
+        self.sync_play_btn = ctk.CTkButton(self.host_control_frame, text="SYNC PLAY (Waiting for Ready...)", command=self.sync_play, fg_color="purple", hover_color="#5e0082", state="disabled")
         self.sync_play_btn.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
         
         self.sync_stop_btn = ctk.CTkButton(self.host_control_frame, text="STOP SINC", command=self.sync_stop, fg_color="red", hover_color="darkred", state="disabled")
         self.sync_stop_btn.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        
+        # Client Controls
+        self.client_control_frame = ctk.CTkFrame(self.tab_multi)
+        self.client_control_frame.grid(row=4, column=0, padx=10, pady=5, sticky="ew")
+        self.client_control_frame.grid_columnconfigure(0, weight=1)
+        
+        self.ready_btn = ctk.CTkButton(self.client_control_frame, text="I'm Ready!", command=self.toggle_ready, state="disabled")
+        self.ready_btn.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
 
     # --- Actions ---
 
@@ -149,21 +202,68 @@ class App(ctk.CTk):
             self.progress_bar.set(0)
             self.time_label.configure(text="00:00 / 00:00")
             
+        # Auto-advance song if finished naturally
+        is_playing_now = self.player.is_playing
+        if self.was_playing and not is_playing_now and not self.player.stop_requested:
+            # Reached end of file naturally, play next
+            self.next_song(autoplay=True)
+            
+        self.was_playing = is_playing_now
+            
         self.after(200, self.update_led_loop)
 
-    def load_file(self):
-        file_path = filedialog.askopenfilename(filetypes=[("MIDI Files", "*.mid *.midi")])
-        if file_path:
-            filename = os.path.basename(file_path)
-            self.file_label.configure(text=filename)
+    def load_files(self):
+        file_paths = filedialog.askopenfilenames(filetypes=[("MIDI Files", "*.mid *.midi")])
+        if file_paths:
+            for p in file_paths:
+                name = os.path.basename(p)
+                if name not in [s["name"] for s in self.playlist]:
+                    self.playlist.append({"name": name, "path": p})
+            
+            self._update_playlist_ui()
+            
+            if self.current_song_idx == -1 and self.playlist:
+                self.current_song_idx = 0
+                self._load_current_song()
+
+    def _update_playlist_ui(self):
+        if not self.playlist:
+            self.song_menu.configure(values=["No file selected"])
+            self.song_var.set("No file selected")
+        else:
+            names = [s["name"] for s in self.playlist]
+            self.song_menu.configure(values=names)
+
+    def on_song_select(self, choice):
+        for idx, s in enumerate(self.playlist):
+            if s["name"] == choice:
+                self.current_song_idx = idx
+                self._load_current_song()
+                break
+
+    def prev_song(self):
+        if not self.playlist: return
+        self.current_song_idx = (self.current_song_idx - 1) % len(self.playlist)
+        self._load_current_song(autoplay=self.player.is_playing)
+
+    def next_song(self, autoplay=False):
+        if not self.playlist: return
+        was_playing = self.player.is_playing or autoplay
+        self.current_song_idx = (self.current_song_idx + 1) % len(self.playlist)
+        self._load_current_song(autoplay=was_playing)
+
+    def _load_current_song(self, autoplay=False):
+        if 0 <= self.current_song_idx < len(self.playlist):
+            song = self.playlist[self.current_song_idx]
+            self.song_var.set(song["name"])
             self.player.stop()
-            self._parse_and_load(file_path)
+            self._parse_and_load(song["path"])
             
-            # If hosting, share to room
+            if autoplay:
+                self.play_solo()
+            
             if self.network.room_code and self.network.is_host:
-                self.network.share_midi(file_path, filename)
-            
-            # Update lobby UI to show new checkboxes if host
+                self.network.share_midi(song["path"], song["name"])
             if self.network.room_code:
                 self._update_lobby_ui(self.network.room_state)
 
@@ -215,6 +315,16 @@ class App(ctk.CTk):
         self.status_label.configure(text=f"Joined Room: {room}", text_color="green")
         self.host_btn.configure(state="disabled")
         self.join_btn.configure(state="disabled")
+        self.ready_btn.configure(state="normal")
+        self.my_ready_status = False
+
+    def toggle_ready(self):
+        self.my_ready_status = not self.my_ready_status
+        if self.my_ready_status:
+            self.ready_btn.configure(text="✅ Ready!", fg_color="green", hover_color="darkgreen")
+        else:
+            self.ready_btn.configure(text="I'm Ready!", fg_color=["#3a7ebf", "#1f538d"], hover_color=["#325882", "#14375e"])
+        self.network.send_ready_status(self.my_ready_status)
 
     def sync_play(self):
         if self.events and self.network.is_host:
@@ -263,6 +373,10 @@ class App(ctk.CTk):
             status_lbl = ctk.CTkLabel(frame, text=status_text, width=20)
             status_lbl.pack(side="left", padx=(10, 0), pady=10)
             
+            ready_text = "✅" if p.get("ready", False) else "⏳"
+            ready_lbl = ctk.CTkLabel(frame, text=ready_text, width=20)
+            ready_lbl.pack(side="left", padx=(5, 0), pady=10)
+            
             lbl = ctk.CTkLabel(frame, text=name, width=120, anchor="w", font=ctk.CTkFont(weight="bold"))
             lbl.pack(side="left", padx=(5, 10), pady=10)
             
@@ -288,6 +402,13 @@ class App(ctk.CTk):
                 assigned_text = ", ".join(map(str, p['channels'])) if p['channels'] else "None"
                 lbl2 = ctk.CTkLabel(frame, text=f"Assigned Channels: {assigned_text}", text_color="cyan")
                 lbl2.pack(side="left", padx=10, pady=10)
+                
+        if self.network.is_host:
+            all_ready = all(p.get("ready", False) for p in state["players"])
+            if all_ready and self.events:
+                self.sync_play_btn.configure(state="normal", text="SYNC PLAY (All Ready!)")
+            else:
+                self.sync_play_btn.configure(state="disabled", text="SYNC PLAY (Waiting for Ready...)")
 
     def _trigger_play(self, global_start_time, my_channels):
         delay = global_start_time - self.network.get_global_time()
@@ -302,11 +423,18 @@ class App(ctk.CTk):
         with open(file_path, "wb") as f:
             f.write(data)
         
-        self.file_label.configure(text=f"{filename} (Received)")
+        # In client mode, we just override current song view (or add to playlist)
+        # We will clear playlist and set this as the only song for the client
+        self.playlist = [{"name": f"{filename} (Received)", "path": file_path}]
+        self.current_song_idx = 0
+        self._update_playlist_ui()
+        self.song_var.set(self.playlist[0]["name"])
+        
         self._parse_and_load(file_path)
 
     def destroy(self):
         self.player.stop()
+        self.live_midi.stop_listening()
         self.network.disconnect()
         super().destroy()
 
